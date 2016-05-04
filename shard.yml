@@ -1,0 +1,7 @@
+name: aho_corasick
+version: 0.1.0
+
+authors:
+  - chenkovsky <chenkov@yeah.net>
+
+license: MIT
