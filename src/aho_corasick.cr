@@ -7,7 +7,6 @@ class AhoCorasick
     @root = Node.new
 
     build_trie(dictionary)
-    puts @root.to_s
     build_suffix_map
   end
 
