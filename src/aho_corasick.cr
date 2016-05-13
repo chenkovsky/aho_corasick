@@ -47,6 +47,7 @@ class AhoCorasick
   end
 
   class Node
+    @suffix : Node?
     getter :matches, :child_map, :parent
     property :suffix
 
