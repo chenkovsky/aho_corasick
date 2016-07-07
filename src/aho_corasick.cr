@@ -1,9 +1,80 @@
+require "json"
+
 class AhoCorasick
   private def root
     @root
   end
 
-  def initialize(dictionary)
+  private def collect_nodes(node : Node, ret : Array(Node) = [] of Node)
+    ret << node
+    node.child_map.each do |char, child|
+      collect_nodes(child, ret)
+    end
+    return ret
+  end
+
+  def to_json(io)
+    nodes = collect_nodes(@root)
+    node_to_idx = {} of Node => Int32
+    nodes.each_with_index { |n, idx| node_to_idx[n] = idx }
+    io << "["
+    nodes.each_with_index do |n, idx|
+      suffix = n.suffix
+      parent = n.parent
+      parent_idx = parent ? node_to_idx[parent] : -1
+      suffix_idx = suffix ? node_to_idx[suffix] : -1
+      child_map = {} of Char => Int32
+      n.child_map.each do |char, child|
+        child_map[char] = node_to_idx[child]
+      end
+      io << "{\"pa\":#{parent_idx},\"sx\":#{suffix_idx},\"mt\":"
+      n.matches.to_json io
+      io << ",\"mp\":"
+      child_map.to_json io
+      io << "}"
+      if idx + 1 != nodes.size
+        io << ","
+      end
+    end
+    io << "]"
+  end
+
+  def self.from_json(s)
+    js = JSON.parse s
+    nodes = [] of Node
+    parent_map = {} of Tuple(Node, Char) => Int32
+    suffix_map = {} of Node => Int32
+    js.each do |n|
+      parent_idx = n["pa"].as_i
+      suffix_idx = n["sx"].as_i
+      parent = parent_idx < 0 ? nil : nodes[parent_idx]
+      node = Node.new parent
+      nodes << node
+      n["mt"].as_a.each do |m|
+        node.matches << m.as(Int64).to_i32
+      end
+      n["mp"].each do |char, child_idx|
+        parent_map[{node, char.as_s[0]}] = child_idx.as_i
+      end
+      if suffix_idx >= 0
+        suffix_map[node] = suffix_idx
+      end
+    end
+    parent_map.each do |k, v|
+      node, char = k
+      node.child_map[char] = nodes[v]
+    end
+    suffix_map.each do |node, v|
+      node.suffix = nodes[v]
+    end
+    return AhoCorasick.new nodes[0]
+  end
+
+  def initialize(root : Node)
+    @root = root
+  end
+
+  def initialize(dictionary : Array(String))
     @root = Node.new
 
     build_trie(dictionary)
@@ -58,7 +129,7 @@ class AhoCorasick
     end
 
     def search(char : Char) : (Node | Nil)
-      child_map[char]? || (suffix && (suffix as Node).search(char))
+      child_map[char]? || (suffix && (suffix.as(Node)).search(char))
     end
 
     def child_or_create(char)
@@ -88,9 +159,9 @@ class AhoCorasick
     end
 
     def find_failure_node(char : Char)
-      failure = suffix as Node
+      failure = suffix.as(Node)
       until failure.search(char) || failure.root?
-        failure = failure.suffix as Node
+        failure = failure.suffix.as(Node)
       end
 
       failure
