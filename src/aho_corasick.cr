@@ -1,179 +1,231 @@
 require "json"
 
 class AhoCorasick
-  private def root
-    @root
+  struct MatchList
+    getter :elem, :next_
+
+    def initialize(@elem : Int32, @next_ : Int32)
+    end
+
+    JSON.mapping(
+      elem: Int32,
+      next_: Int32
+    )
   end
 
-  private def collect_nodes(node : Node, ret : Array(Node) = [] of Node)
-    ret << node
-    node.child_map.each do |char, child|
-      collect_nodes(child, ret)
+  struct AhoJSON
+    JSON.mapping(
+      chs: String,
+      pa: Array(Int32),
+      sx: Array(Int32),
+      ml: Array(Int32),
+      cl: Array(Int32),
+      sb: Array(Int32),
+      ms: Array(MatchList),
+      rt: Int32
+    )
+
+    def initialize(@chs : String,
+                   @pa : Array(Int32),
+                   @sx : Array(Int32),
+                   @ml : Array(Int32),
+                   @cl : Array(Int32),
+                   @sb : Array(Int32),
+                   @ms : Array(MatchList),
+                   @rt : Int32)
     end
-    return ret
+  end
+
+  alias Rel = {elem: Int32, char: Char}
+
+  def create_node(char : Char, parent : Int32 = -1, suffix : Int32 = -1, match_list : Int32 = -1, child_list : Int32 = -1, sibling : Int32 = -1)
+    node_idx = @char.size
+    @char << char
+    @parent << parent
+    @suffix << suffix
+    @match_list << match_list
+    @child_list << child_list
+    @sibling << sibling
+    return node_idx
   end
 
   def to_json(io)
-    nodes = collect_nodes(@root)
-    node_to_idx = {} of Node => Int32
-    nodes.each_with_index { |n, idx| node_to_idx[n] = idx }
-    io << "["
-    nodes.each_with_index do |n, idx|
-      suffix = n.suffix
-      parent = n.parent
-      parent_idx = parent ? node_to_idx[parent] : -1
-      suffix_idx = suffix ? node_to_idx[suffix] : -1
-      child_map = {} of Char => Int32
-      n.child_map.each do |char, child|
-        child_map[char] = node_to_idx[child]
-      end
-      io << "{\"pa\":#{parent_idx},\"sx\":#{suffix_idx},\"mt\":"
-      n.matches.to_json io
-      io << ",\"mp\":"
-      child_map.to_json io
-      io << "}"
-      if idx + 1 != nodes.size
-        io << ","
+    str = String.build do |s|
+      @char.each do |x|
+        s << x
       end
     end
-    io << "]"
+    js = AhoJSON.new chs: str, pa: @parent, sx: @suffix, ml: @match_list, cl: @child_list, sb: @sibling, ms: @matches, rt: @root_idx
+    js.to_json io
   end
 
-  def self.from_json(s)
-    js = JSON.parse s
-    nodes = [] of Node
-    parent_map = {} of Tuple(Node, Char) => Int32
-    suffix_map = {} of Node => Int32
-    js.each do |n|
-      parent_idx = n["pa"].as_i
-      suffix_idx = n["sx"].as_i
-      parent = parent_idx < 0 ? nil : nodes[parent_idx]
-      node = Node.new parent
-      nodes << node
-      n["mt"].as_a.each do |m|
-        node.matches << m.as(Int64).to_i32
-      end
-      n["mp"].each do |char, child_idx|
-        parent_map[{node, char.as_s[0]}] = child_idx.as_i
-      end
-      if suffix_idx >= 0
-        suffix_map[node] = suffix_idx
-      end
-    end
-    parent_map.each do |k, v|
-      node, char = k
-      node.child_map[char] = nodes[v]
-    end
-    suffix_map.each do |node, v|
-      node.suffix = nodes[v]
-    end
-    return AhoCorasick.new nodes[0]
+  def self.from_json(str)
+    js = AhoJSON.from_json(str)
+    return AhoCorasick.new js
   end
 
-  def initialize(root : Node)
-    @root = root
+  @root_idx : Int32
+  @char : Array(Char)
+  @parent : Array(Int32)
+  @suffix : Array(Int32)
+  @match_list : Array(Int32)
+  @child_list : Array(Int32)
+  @sibling : Array(Int32)
+
+  def initialize(js : AhoJSON)
+    @char = js.chs.chars
+    @parent = js.pa
+    @suffix = js.sx
+    @match_list = js.ml
+    @child_list = js.cl
+    @sibling = js.sb
+    @matches = js.ms
+    @root_idx = js.rt
+    @child_map = Hash(Rel, Int32).new(initial_capacity: @child_list.size)
+    @parent.each_with_index do |parent_idx, node_idx|
+      if parent_idx >= 0
+        @child_map[{elem: parent_idx, char: @char[node_idx]}] = node_idx
+      end
+    end
   end
 
   def initialize(dictionary : Array(String))
-    @root = Node.new
+    arr_init_size = dictionary.size * 4
+    @parent = Array(Int32).new arr_init_size
+    @char = Array(Char).new arr_init_size
+    @suffix = Array(Int32).new arr_init_size
+    @match_list = Array(Int32).new arr_init_size
+    @child_list = Array(Int32).new arr_init_size
+    @sibling = Array(Int32).new arr_init_size
 
+    @matches = Array(MatchList).new arr_init_size
+    @child_map = Hash(Rel, Int32).new(initial_capacity: dictionary.size*4)
+    @root_idx = create_node(char: '\0')
     build_trie(dictionary)
     build_suffix_map
   end
 
   def match(string : String)
     idx = -1
-    string.each_char.reduce(root) do |node, char|
+    string.each_char.reduce(@root_idx) do |node_idx, char|
       idx += 1
-      child = (node || root).search(char)
-      next unless child
-      child.matches.each do |m|
-        yield idx, m
+      cur_node_idx = @root_idx
+      if node_idx >= 0
+        cur_node_idx = node_idx
       end
-      child
+      child = search(cur_node_idx, char)
+      unless child >= 0
+        -1
+      else
+        match_list = @match_list[child]
+        while match_list >= 0
+          yield idx, @matches[match_list].elem
+          match_list = @matches[match_list].next_
+        end
+        child
+      end
     end
   end
 
   private def build_trie(dictionary)
     dictionary.each_with_index do |string, idx|
-      string.each_char.reduce(root) do |node, char|
-        node.child_or_create(char)
-      end.matches << idx
+      tail_idx = string.each_char.reduce(@root_idx) do |node_idx, char|
+        child_or_create(node_idx, char)
+      end
+      add_match tail_idx, idx
     end
+  end
+
+  private def add_match(node_idx : Int32, elem : Int32)
+    next_ = @match_list[node_idx]
+    m = MatchList.new elem, next_
+    m_idx = @matches.size
+    @matches << m
+    @match_list[node_idx] = m_idx
+  end
+
+  private def child_or_create(node_idx : Int32, char : Char) : Int32
+    key = {elem: node_idx, char: char}
+    if @child_map.has_key? key
+      return @child_map[key]
+    end
+    prev_child_list = @child_list[node_idx]
+    child_idx = create_node char, node_idx, -1, -1, -1, prev_child_list
+    @child_list[node_idx] = child_idx
+    @child_map[key] = child_idx
+    return child_idx
   end
 
   def build_suffix_map
-    queue = [] of Node
+    queue = [] of Int32 # node_idx queue
 
-    root.children.each do |child|
-      child.suffix = root
+    child = @child_list[@root_idx]
+    while child >= 0
+      @suffix[child] = @root_idx
       queue << child
+      child = @sibling[child]
     end
 
     until queue.empty?
-      node = queue.delete_at 0
-      node.children.each { |child| queue << child }
-      node.build_child_suffixes
+      node_idx = queue.delete_at 0
+      child = @child_list[node_idx]
+      while child >= 0
+        queue << child
+        child = @sibling[child]
+      end
+      build_child_suffixes node_idx
     end
   end
 
-  class Node
-    @suffix : Node?
-    getter :matches, :child_map, :parent
-    property :suffix
-
-    def initialize(parent : (Node | Nil) = nil)
-      @matches = [] of Int32
-      @child_map = {} of Char => Node
-      @parent = parent
+  def find_failure_node(node_idx : Int32, char : Char) : Int32
+    failure_idx = @suffix[node_idx]
+    until search(failure_idx, char) >= 0 || failure_idx == @root_idx
+      failure_idx = @suffix[failure_idx]
     end
+    failure_idx
+  end
 
-    def search(char : Char) : (Node | Nil)
-      child_map[char]? || (suffix && (suffix.as(Node)).search(char))
+  def search(node_idx : Int32, char : Char) : Int32
+    key = {elem: node_idx, char: char}
+    suffix = @suffix[node_idx]
+    ret = @child_map[key]?
+    if !ret.nil?
+      return ret
     end
-
-    def child_or_create(char)
-      child_map[char] ||= self.class.new(self)
+    if suffix >= 0
+      return search(suffix, char)
     end
+    return -1
+  end
 
-    def children
-      child_map.values
+  def merge_matches(node_idx : Int32, suffix_idx : Int32)
+    match = @match_list[suffix_idx]
+    prev_new_match = @match_list[node_idx]
+    while match >= 0
+      match_node = @matches[match]
+      new_match_node = MatchList.new match_node.elem, prev_new_match
+      prev_new_match = @matches.size
+      @matches << new_match_node
+      match = match_node.next_
     end
+    @match_list[node_idx] = prev_new_match
+  end
 
-    def root?
-      !parent
-    end
+  def build_child_suffixes(node_idx : Int32)
+    child = @child_list[node_idx]
+    while child >= 0
+      char = @char[child]
 
-    def build_child_suffixes
-      child_map.each do |char, child|
-        failure = find_failure_node(char)
-        child_suffix = failure.search(char)
+      failure_idx = find_failure_node(node_idx, char)
+      child_suffix = search(failure_idx, char)
 
-        if child_suffix
-          child.suffix = child_suffix
-          child.matches.concat(child_suffix.matches)
-        elsif failure.root?
-          child.suffix = failure
-        end
+      if child_suffix >= 0
+        @suffix[child] = child_suffix
+        merge_matches(child, child_suffix)
+      else
+        @suffix[child] = failure_idx
       end
-    end
-
-    def find_failure_node(char : Char)
-      failure = suffix.as(Node)
-      until failure.search(char) || failure.root?
-        failure = failure.suffix.as(Node)
-      end
-
-      failure
-    end
-
-    def to_s
-      <<-STR
-{
-"child_map": {#{@child_map.map { |k, v| "\"#{k}\": #{v.to_s}" }.join(",")}},
-"matches": #{@matches}
-}
-STR
+      child = @sibling[child]
     end
   end
 end
