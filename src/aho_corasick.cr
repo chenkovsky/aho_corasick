@@ -157,8 +157,8 @@ class AhoCorasick
   end
 
   def build_suffix_map
-    queue = [] of Int32 # node_idx queue
-
+    queue = Array(Int32).new @char.size # node_idx queue
+    queue_idx = 0
     child = @child_list[@root_idx]
     while child >= 0
       @suffix[child] = @root_idx
@@ -166,8 +166,9 @@ class AhoCorasick
       child = @sibling[child]
     end
 
-    until queue.empty?
-      node_idx = queue.delete_at 0
+    until queue.size <= queue_idx
+      node_idx = queue[queue_idx]
+      queue_idx += 1
       child = @child_list[node_idx]
       while child >= 0
         queue << child
